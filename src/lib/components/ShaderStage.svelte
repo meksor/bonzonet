@@ -103,6 +103,9 @@
   }
 
   onMount(() => {
+    if (showEditor && editorReadOnly) {
+      overlayOpen = true
+    }
     window.addEventListener('keydown', handleKeyDown)
   })
 
@@ -110,13 +113,6 @@
     if (!compileError || compileError === previousError) return
     errorExpanded = false
     previousError = compileError
-  })
-
-  $effect(() => {
-    if (!showEditor || !editorReadOnly) return
-    if (!overlayOpen) {
-      overlayOpen = true
-    }
   })
 
   onDestroy(() => {
@@ -127,14 +123,14 @@
 <div class="stage-shell" class:overlay-active={showEditor && overlayOpen}>
   <ShaderView fragmentShader={fragmentShader} on:compileerror={handleCompileError} />
 
-  {#if showEditor && !editorReadOnly}
     <div class="stage-actions">
       <button class="stage-action" type="button" onclick={toggleOverlay}>Toggle Editor (F1)</button>
-      <button class="stage-action" type="button" onclick={confirmFromTopBar} disabled={!editorEnabled}>
-        Confirm Shader (Shift+Enter)
-      </button>
-    </div>
-  {/if}
+      {#if showEditor && !editorReadOnly}
+        <button class="stage-action" type="button" onclick={confirmFromTopBar} disabled={!editorEnabled}>
+          Confirm Shader (Shift+Enter)
+        </button>
+      {/if}
+  </div>
 
   {#if showEditor && overlayOpen}
     <div class="editor-overlay">

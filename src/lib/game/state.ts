@@ -48,7 +48,7 @@ const TRYSTERO_CONFIG = {
   relayUrls: RELAY_URLS,
   relayRedundancy: 3,
   pow: {
-    enabled: false,
+    enabled: true,
     maxDifficulty: 24,
     maxNonce: 1_000_000,
     fallbackRelayUrls: POW_FALLBACK_RELAY_URLS,
