@@ -4,6 +4,8 @@ A real-time, peer-to-peer shader duel game where players take turns editing a sh
 
 ## Play it
 
+[... on GH Pages](https://meksor.github.io/bonzonet/)
+
 1. A **host** creates a game room and shares two codes: one for **players**, one for the **audience**.
 2. Players connect using the player code and take turns editing a shared fragment shader within a character budget.
 3. The **audience** connects using the audience code and votes for their favorite player each round.
