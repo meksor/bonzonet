@@ -205,8 +205,10 @@
   let charsUsed = $state(0);
   let turnAddedRanges: Array<{ from: number; to: number }> = [];
 
+  const countNonWhitespace = (s: string) => s.replace(/\s/g, "").length;
+
   const updateUsage = () => {
-    charsUsed = Math.max(0, currentValue.length - baselineValue.length);
+    charsUsed = Math.max(0, countNonWhitespace(currentValue) - countNonWhitespace(baselineValue));
     dispatch("updateUsage", charsUsed);
   };
 
