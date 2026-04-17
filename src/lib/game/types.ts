@@ -59,6 +59,7 @@ export type ControlMessage = {
   turnEndsAtMs: number | null
   completedPlayerPubKeys: string[]
   charBudgetByPlayer: Record<string, number>
+  audienceConnectedCount: number
 }
 
 export type SnapshotMessage = {
@@ -80,4 +81,27 @@ export type SnapshotMessage = {
   voteWindowSeconds: number
   minCharFloor: number
   charsPerPlayer: number
+  audienceConnectedCount: number
+}
+
+export type BroadcastMessage = {
+  hostPubKey: string
+  hostName: string
+  sharePlayerCode: boolean
+  shareAudienceCode: boolean
+  playerRoomKey: string
+  audienceRoomKey: string
+  phase: Phase
+  round: number
+  charsPerPlayer: number
+  minCharFloor: number
+  turnLimitSeconds: number
+  voteWindowSeconds: number
+  gracePeriodSeconds: number
+  correspondenceMode: boolean
+  timestamp: number
+}
+
+export type BroadcastListing = BroadcastMessage & {
+  peerId: string
 }

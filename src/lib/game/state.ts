@@ -12,6 +12,8 @@ import {
 import { computeCharBudgets, countVotes } from './scoring'
 import { validateFragmentShader } from './shaderCompile'
 import type {
+  BroadcastListing,
+  BroadcastMessage,
   ConfirmEntry,
   ConfirmMessage,
   ControlMessage,
@@ -23,6 +25,10 @@ import type {
   SnapshotMessage,
   VoteMessage,
 } from './types'
+
+const BROADCAST_ROOM_KEY = 'bonzonet-broadcast-v1'
+const BROADCAST_STALE_MS = 25_000
+const BROADCAST_INTERVAL_MS = 8_000
 
 const FALLBACK_SHADER = `precision mediump float;
 uniform float time;
@@ -70,12 +76,17 @@ export interface GameState {
   audienceRoomKey: Writable<string>
   statusMessage: Writable<string>
   isConnected: Writable<boolean>
+  broadcastEnabled: Writable<boolean>
+  sharePlayerCode: Writable<boolean>
+  shareAudienceCode: Writable<boolean>
+  broadcastListings: Writable<Record<string, BroadcastListing>>
 
   phase: Writable<Phase>
   round: Writable<number>
   hostPubKey: Writable<string | null>
   activePlayerPubKey: Writable<string | null>
   completedPlayerPubKeys: Writable<string[]>
+  audienceConnectedCount: Writable<number>
   turnEndsAtMs: Writable<number | null>
   votingEndsAtMs: Writable<number | null>
   nowMs: Writable<number>
@@ -126,6 +137,9 @@ export interface GameState {
   setVoteWindowSeconds: (value: number) => void
   setGracePeriodSeconds: (value: number) => void
   setCorrespondenceMode: (value: boolean) => void
+  setBroadcastEnabled: (value: boolean) => void
+  setSharePlayerCode: (value: boolean) => void
+  setShareAudienceCode: (value: boolean) => void
 
   toggleReady: () => void
   startGame: () => void
@@ -148,12 +162,17 @@ const createGameState = (): GameState => {
   const audienceRoomKey = writable(`aud-${crypto.randomUUID().slice(0, 8)}`)
   const statusMessage = writable('Disconnected')
   const isConnected = writable(false)
+  const broadcastEnabled = writable(false)
+  const sharePlayerCode = writable(true)
+  const shareAudienceCode = writable(true)
+  const broadcastListings = writable<Record<string, BroadcastListing>>({})
 
   const phase = writable<Phase>('lobby')
   const round = writable(1)
   const hostPubKey = writable<string | null>(null)
   const activePlayerPubKey = writable<string | null>(null)
   const completedPlayerPubKeys = writable<string[]>([])
+  const audienceConnectedCount = writable(0)
   const turnEndsAtMs = writable<number | null>(null)
   const votingEndsAtMs = writable<number | null>(null)
   const nowMs = writable(Date.now())
@@ -245,6 +264,7 @@ const createGameState = (): GameState => {
     hostPubKey.set(amHost() ? myPubKey() : null)
     activePlayerPubKey.set(null)
     completedPlayerPubKeys.set([])
+    audienceConnectedCount.set(0)
     turnEndsAtMs.set(null)
     votingEndsAtMs.set(null)
     confirmedShader.set(FALLBACK_SHADER)
@@ -278,6 +298,7 @@ const createGameState = (): GameState => {
 
   let playerRoom: ReturnType<typeof joinRoom> | null = null
   let audienceRoom: ReturnType<typeof joinRoom> | null = null
+  let broadcastRoom: ReturnType<typeof joinRoom> | null = null
 
   let sendPresencePlayer: ((payload: PresenceMessage, targetPeerId?: string) => void) | null = null
   let sendLivePlayer: ((payload: LiveEditMessage, targetPeerId?: string) => void) | null = null
@@ -289,9 +310,12 @@ const createGameState = (): GameState => {
   let sendControlAudience: ((payload: ControlMessage, targetPeerId?: string) => void) | null = null
   let sendSnapshotAudience: ((payload: SnapshotMessage, targetPeerId?: string) => void) | null = null
   let sendVoteAudience: ((payload: VoteMessage, targetPeerId?: string) => void) | null = null
+  let sendBroadcast: ((payload: BroadcastMessage, targetPeerId?: string) => void) | null = null
 
   let presenceRetryTimers: number[] = []
   let presenceHeartbeat: number | null = null
+  let broadcastHeartbeat: number | null = null
+  let audiencePeerIds = new Set<string>()
 
   const clearPresenceTimers = () => {
     presenceRetryTimers.forEach((timerId) => clearTimeout(timerId))
@@ -334,6 +358,76 @@ const createGameState = (): GameState => {
     }, 8000)
   }
 
+  const pruneBroadcastListings = () => {
+    const cutoff = Date.now() - BROADCAST_STALE_MS
+    broadcastListings.update((current) => {
+      let changed = false
+      const next: Record<string, BroadcastListing> = {}
+      Object.entries(current).forEach(([pubKey, listing]) => {
+        if (listing.timestamp < cutoff) {
+          changed = true
+          return
+        }
+        next[pubKey] = listing
+      })
+      return changed ? next : current
+    })
+  }
+
+  const buildBroadcastPayload = (): BroadcastMessage => ({
+    hostPubKey: myPubKey(),
+    hostName: get(playerName).trim() || short(myPubKey()),
+    sharePlayerCode: get(sharePlayerCode),
+    shareAudienceCode: get(shareAudienceCode),
+    playerRoomKey: get(sharePlayerCode) ? get(playerRoomKey).trim() : '',
+    audienceRoomKey: get(shareAudienceCode) ? get(audienceRoomKey).trim() : '',
+    phase: get(phase),
+    round: get(round),
+    charsPerPlayer: get(charsPerPlayer),
+    minCharFloor: get(minCharFloor),
+    turnLimitSeconds: get(turnLimitSeconds),
+    voteWindowSeconds: get(voteWindowSeconds),
+    gracePeriodSeconds: get(gracePeriodSeconds),
+    correspondenceMode: get(correspondenceMode),
+    timestamp: Date.now(),
+  })
+
+  const publishBroadcast = (reason: string, targetPeerId?: string) => {
+    if (!amHost()) return
+    if (!get(isConnected)) return
+    if (!get(broadcastEnabled)) return
+    if (!sendBroadcast) return
+
+    const payload = buildBroadcastPayload()
+    if (!payload.playerRoomKey && !payload.audienceRoomKey) return
+
+    debugFlow('broadcast:send', { reason, targetPeerId: targetPeerId ?? null, payload })
+    debugSend('lobby:broadcast', payload, targetPeerId)
+    sendBroadcast(payload, targetPeerId)
+    broadcastListings.update((current) => ({
+      ...current,
+      [payload.hostPubKey]: {
+        ...payload,
+        peerId: 'local',
+      },
+    }))
+  }
+
+  const clearBroadcastHeartbeat = () => {
+    if (broadcastHeartbeat !== null) {
+      clearInterval(broadcastHeartbeat)
+      broadcastHeartbeat = null
+    }
+  }
+
+  const ensureBroadcastHeartbeat = () => {
+    clearBroadcastHeartbeat()
+    broadcastHeartbeat = window.setInterval(() => {
+      pruneBroadcastListings()
+      publishBroadcast('heartbeat')
+    }, BROADCAST_INTERVAL_MS)
+  }
+
   const buildSnapshot = (): SnapshotMessage => ({
     hostPubKey: get(hostPubKey),
     phase: get(phase),
@@ -353,6 +447,7 @@ const createGameState = (): GameState => {
     voteWindowSeconds: get(voteWindowSeconds),
     minCharFloor: get(minCharFloor),
     charsPerPlayer: get(charsPerPlayer),
+    audienceConnectedCount: get(audienceConnectedCount),
   })
 
   const applySnapshot = (payload: SnapshotMessage) => {
@@ -378,6 +473,7 @@ const createGameState = (): GameState => {
     voteWindowSeconds.set(payload.voteWindowSeconds)
     minCharFloor.set(payload.minCharFloor)
     charsPerPlayer.set(payload.charsPerPlayer)
+    audienceConnectedCount.set(payload.audienceConnectedCount)
   }
 
   const applyControl = (payload: ControlMessage) => {
@@ -392,6 +488,7 @@ const createGameState = (): GameState => {
     turnEndsAtMs.set(payload.turnEndsAtMs)
     completedPlayerPubKeys.set(payload.completedPlayerPubKeys)
     charBudgetByPlayer.set(payload.charBudgetByPlayer)
+    audienceConnectedCount.set(payload.audienceConnectedCount)
   }
 
   const broadcastSnapshot = () => {
@@ -415,12 +512,14 @@ const createGameState = (): GameState => {
       turnEndsAtMs: get(turnEndsAtMs),
       completedPlayerPubKeys: get(completedPlayerPubKeys),
       charBudgetByPlayer: get(charBudgetByPlayer),
+      audienceConnectedCount: get(audienceConnectedCount),
     }
 
     debugSend('player:control', payload)
     sendControlPlayer(payload)
     debugSend('audience:control-stream', payload)
     sendControlAudience?.(payload)
+    publishBroadcast('control')
   }
 
   const startTurnTimer = () => {
@@ -612,6 +711,11 @@ const createGameState = (): GameState => {
         graceForPubKey.set(null)
         graceDeadlineMs.set(null)
       }
+
+      // Keep lobby player lists in sync even when peers are not directly connected to each other.
+      if (amHost()) {
+        broadcastSnapshot()
+      }
     })
 
     getLive((payload) => {
@@ -656,6 +760,10 @@ const createGameState = (): GameState => {
 
       upsertPlayer(pubKey, { isOnline: false })
 
+      if (amHost()) {
+        broadcastSnapshot()
+      }
+
       if (amHost() && get(phase) === 'turn' && get(activePlayerPubKey) === pubKey) {
         graceForPubKey.set(pubKey)
         graceDeadlineMs.set(Date.now() + get(gracePeriodSeconds) * 1000)
@@ -685,6 +793,7 @@ const createGameState = (): GameState => {
 
     audienceRoom = joinRoom(roomConfig, key)
     debugFlow('setupAudienceRoom:joined', { key })
+    audiencePeerIds = new Set<string>()
 
     const [sendLive, getLive] = audienceRoom.makeAction('live-stream') as ActionTuple<LiveEditMessage>
     const [sendControl, getControl] = audienceRoom.makeAction('control-stream') as ActionTuple<ControlMessage>
@@ -718,6 +827,10 @@ const createGameState = (): GameState => {
 
     audienceRoom.onPeerJoin((peerId) => {
       console.debug('[peer-join]', 'audience-room', { peerId })
+      audiencePeerIds.add(peerId)
+      if (amHost()) {
+        audienceConnectedCount.set(audiencePeerIds.size)
+      }
       const snapshot = buildSnapshot()
       debugSend('audience:snapshot-stream', snapshot, peerId)
       sendSnapshotAudience?.(snapshot, peerId)
@@ -730,10 +843,53 @@ const createGameState = (): GameState => {
         turnEndsAtMs: get(turnEndsAtMs),
         completedPlayerPubKeys: get(completedPlayerPubKeys),
         charBudgetByPlayer: get(charBudgetByPlayer),
+        audienceConnectedCount: get(audienceConnectedCount),
       }
       debugSend('audience:control-stream', controlPayload, peerId)
       sendControlAudience?.(controlPayload, peerId)
+
+      if (amHost()) {
+        broadcastControl()
+      }
     })
+
+    audienceRoom.onPeerLeave((peerId) => {
+      console.debug('[peer-leave]', 'audience-room', { peerId })
+      audiencePeerIds.delete(peerId)
+      if (!amHost()) return
+      audienceConnectedCount.set(audiencePeerIds.size)
+      broadcastControl()
+    })
+  }
+
+  const setupBroadcastRoom = (roomConfig: NostrPowRoomConfig) => {
+    if (broadcastRoom) return
+
+    broadcastRoom = joinRoom(roomConfig, BROADCAST_ROOM_KEY)
+    const [send, getBroadcast] = broadcastRoom.makeAction('broadcast') as ActionTuple<BroadcastMessage>
+    sendBroadcast = send
+
+    getBroadcast((payload, peerId) => {
+      debugReceive('lobby:broadcast', payload, peerId)
+      if (!payload.hostPubKey) return
+      if (!payload.playerRoomKey && !payload.audienceRoomKey) return
+
+      broadcastListings.update((current) => ({
+        ...current,
+        [payload.hostPubKey]: {
+          ...payload,
+          peerId,
+        },
+      }))
+    })
+
+    broadcastRoom.onPeerJoin((peerId) => {
+      console.debug('[peer-join]', 'broadcast-room', { peerId })
+      publishBroadcast('peer-join-targeted', peerId)
+    })
+
+    ensureBroadcastHeartbeat()
+    publishBroadcast('setup')
   }
 
   const connect = async () => {
@@ -797,6 +953,7 @@ const createGameState = (): GameState => {
     if (amHost()) {
       hostPubKey.set(myPubKey())
       debugFlow('connect:set-host-pubkey', { hostPubKey: myPubKey() })
+      publishBroadcast('connect')
     }
   }
 
@@ -809,6 +966,8 @@ const createGameState = (): GameState => {
     audienceRoom?.leave()
     playerRoom = null
     audienceRoom = null
+    audiencePeerIds = new Set<string>()
+    audienceConnectedCount.set(0)
 
     sendPresencePlayer = null
     sendLivePlayer = null
@@ -820,6 +979,15 @@ const createGameState = (): GameState => {
     sendControlAudience = null
     sendSnapshotAudience = null
     sendVoteAudience = null
+
+    const localHostKey = myPubKey()
+    if (localHostKey) {
+      broadcastListings.update((current) => {
+        if (!current[localHostKey]) return current
+        const { [localHostKey]: _, ...rest } = current
+        return rest
+      })
+    }
 
     clearPresenceTimers()
 
@@ -1070,8 +1238,21 @@ const createGameState = (): GameState => {
       return
     }
 
+    const roomConfig: NostrPowRoomConfig = {
+      ...TRYSTERO_CONFIG,
+      pow: {
+        ...TRYSTERO_CONFIG.pow,
+        onStatus: (message: string) => {
+          statusMessage.set(message)
+        },
+      },
+    }
+
+    setupBroadcastRoom(roomConfig)
+
     ticker = window.setInterval(() => {
       nowMs.set(Date.now())
+      pruneBroadcastListings()
 
       if (!amHost()) return
       if (!get(isConnected)) return
@@ -1102,6 +1283,10 @@ const createGameState = (): GameState => {
       ticker = null
     }
     disconnect()
+    broadcastRoom?.leave()
+    broadcastRoom = null
+    sendBroadcast = null
+    clearBroadcastHeartbeat()
     clearPresenceTimers()
     initialized = false
   }
@@ -1143,15 +1328,64 @@ const createGameState = (): GameState => {
     return true
   }
 
-  const setPlayerName = (name: string) => playerName.set(name)
-  const setPlayerRoomKey = (key: string) => playerRoomKey.set(key)
-  const setAudienceRoomKey = (key: string) => audienceRoomKey.set(key)
-  const setCharsPerPlayer = (value: number) => charsPerPlayer.set(Number.isFinite(value) ? value : 1)
-  const setMinCharFloor = (value: number) => minCharFloor.set(Number.isFinite(value) ? value : 0)
-  const setTurnLimitSeconds = (value: number) => turnLimitSeconds.set(Number.isFinite(value) ? value : 1)
-  const setVoteWindowSeconds = (value: number) => voteWindowSeconds.set(Number.isFinite(value) ? value : 1)
-  const setGracePeriodSeconds = (value: number) => gracePeriodSeconds.set(Number.isFinite(value) ? value : 1)
-  const setCorrespondenceMode = (value: boolean) => correspondenceMode.set(value)
+  const setPlayerName = (name: string) => {
+    playerName.set(name)
+    publishBroadcast('config-host-name')
+  }
+  const setPlayerRoomKey = (key: string) => {
+    playerRoomKey.set(key)
+    publishBroadcast('config-player-room')
+  }
+  const setAudienceRoomKey = (key: string) => {
+    audienceRoomKey.set(key)
+    publishBroadcast('config-audience-room')
+  }
+  const setCharsPerPlayer = (value: number) => {
+    charsPerPlayer.set(Number.isFinite(value) ? value : 1)
+    publishBroadcast('config-chars-per-player')
+  }
+  const setMinCharFloor = (value: number) => {
+    minCharFloor.set(Number.isFinite(value) ? value : 0)
+    publishBroadcast('config-min-floor')
+  }
+  const setTurnLimitSeconds = (value: number) => {
+    turnLimitSeconds.set(Number.isFinite(value) ? value : 1)
+    publishBroadcast('config-turn-limit')
+  }
+  const setVoteWindowSeconds = (value: number) => {
+    voteWindowSeconds.set(Number.isFinite(value) ? value : 1)
+    publishBroadcast('config-vote-window')
+  }
+  const setGracePeriodSeconds = (value: number) => {
+    gracePeriodSeconds.set(Number.isFinite(value) ? value : 1)
+    publishBroadcast('config-grace-period')
+  }
+  const setCorrespondenceMode = (value: boolean) => {
+    correspondenceMode.set(value)
+    publishBroadcast('config-correspondence')
+  }
+  const setBroadcastEnabled = (value: boolean) => {
+    broadcastEnabled.set(value)
+    publishBroadcast('toggle-enabled')
+
+    if (!value) {
+      const localHostKey = myPubKey()
+      if (!localHostKey) return
+      broadcastListings.update((current) => {
+        if (!current[localHostKey]) return current
+        const { [localHostKey]: _, ...rest } = current
+        return rest
+      })
+    }
+  }
+  const setSharePlayerCode = (value: boolean) => {
+    sharePlayerCode.set(value)
+    publishBroadcast('toggle-share-player-code')
+  }
+  const setShareAudienceCode = (value: boolean) => {
+    shareAudienceCode.set(value)
+    publishBroadcast('toggle-share-audience-code')
+  }
 
   return {
     identity,
@@ -1162,12 +1396,17 @@ const createGameState = (): GameState => {
     audienceRoomKey,
     statusMessage,
     isConnected,
+    broadcastEnabled,
+    sharePlayerCode,
+    shareAudienceCode,
+    broadcastListings,
 
     phase,
     round,
     hostPubKey,
     activePlayerPubKey,
     completedPlayerPubKeys,
+    audienceConnectedCount,
     turnEndsAtMs,
     votingEndsAtMs,
     nowMs,
@@ -1218,6 +1457,9 @@ const createGameState = (): GameState => {
     setVoteWindowSeconds,
     setGracePeriodSeconds,
     setCorrespondenceMode,
+    setBroadcastEnabled,
+    setSharePlayerCode,
+    setShareAudienceCode,
 
     toggleReady,
     startGame,
