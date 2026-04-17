@@ -8,17 +8,49 @@ export const computeCharBudgets = (
   if (playerCount === 0) return {}
 
   const totalVotes = playerPubKeys.reduce((sum, pubKey) => sum + (votesByPlayer[pubKey] ?? 0), 0)
+  const roundTotalChars = charsPerPlayer * playerCount
 
   if (totalVotes === 0) {
     return playerPubKeys.reduce<Record<string, number>>((acc, pubKey) => {
-      acc[pubKey] = Math.max(minCharFloor, charsPerPlayer)
+      acc[pubKey] = charsPerPlayer
       return acc
     }, {})
   }
 
-  return playerPubKeys.reduce<Record<string, number>>((acc, pubKey) => {
-    const weight = ((votesByPlayer[pubKey] ?? 0) / totalVotes) * playerCount
-    acc[pubKey] = Math.max(minCharFloor, Math.round(charsPerPlayer * weight))
+  if (playerCount === 1) {
+    return { [playerPubKeys[0]]: charsPerPlayer }
+  }
+
+  // Inverse voting pressure with conservation of total round characters:
+  // budget_i = floor + A * (1 - voteShare_i), where
+  // A = n * (charsPerPlayer - floor) / (n - 1)
+  // This guarantees a player with all votes gets exactly floor,
+  // and sum(budget_i) remains n * charsPerPlayer before integer rounding.
+  const amplitude = (playerCount * (charsPerPlayer - minCharFloor)) / (playerCount - 1)
+
+  const rawBudgets = playerPubKeys.map((pubKey) => {
+    const voteShare = (votesByPlayer[pubKey] ?? 0) / totalVotes
+    return minCharFloor + amplitude * (1 - voteShare)
+  })
+
+  const baseBudgets = rawBudgets.map((value) => Math.floor(value))
+  const baseTotal = baseBudgets.reduce((sum, value) => sum + value, 0)
+  let remainder = roundTotalChars - baseTotal
+
+  const withFraction = rawBudgets
+    .map((value, index) => ({
+      index,
+      fraction: value - baseBudgets[index],
+    }))
+    .sort((a, b) => b.fraction - a.fraction)
+
+  for (let i = 0; i < withFraction.length && remainder > 0; i += 1) {
+    baseBudgets[withFraction[i].index] += 1
+    remainder -= 1
+  }
+
+  return playerPubKeys.reduce<Record<string, number>>((acc, pubKey, index) => {
+    acc[pubKey] = baseBudgets[index]
     return acc
   }, {})
 }
