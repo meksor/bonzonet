@@ -125,7 +125,13 @@
 </script>
 
 <div class="panel">
-  <p class="status">{statusText}</p>
+  <div class="status-row">
+    <p class="status">{statusText}</p>
+    <div class="audience-meta" aria-label="Audience count">
+      <span>Audience {audienceTotal}</span>
+      <span>Voted {audienceVoted}</span>
+    </div>
+  </div>
 
   {#if canVote}
     <div class="vote-actions">
@@ -169,6 +175,22 @@
     font-size: 0.9rem;
     color: #e7f2ff;
     letter-spacing: 0.01em;
+  }
+
+  .status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.7rem;
+  }
+
+  .audience-meta {
+    display: flex;
+    gap: 0.5rem;
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: #a6c1dc;
+    white-space: nowrap;
   }
 
   .score-strip {
@@ -232,6 +254,16 @@
   }
 
   @media (max-width: 720px) {
+    .status-row {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.25rem;
+    }
+
+    .audience-meta {
+      font-size: 0.72rem;
+    }
+
     .status {
       font-size: 0.8rem;
     }

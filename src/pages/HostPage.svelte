@@ -15,6 +15,7 @@
   const phase = fromStore(gameState.phase)
   const round = fromStore(gameState.round)
   const activePlayerPubKey = fromStore(gameState.activePlayerPubKey)
+  const audienceConnectedCount = fromStore(gameState.audienceConnectedCount)
   const turnEndsAtMs = fromStore(gameState.turnEndsAtMs)
   const votingEndsAtMs = fromStore(gameState.votingEndsAtMs)
   const nowMs = fromStore(gameState.nowMs)
@@ -28,6 +29,8 @@
   const voteWindowSeconds = fromStore(gameState.voteWindowSeconds)
   const gracePeriodSeconds = fromStore(gameState.gracePeriodSeconds)
   const correspondenceMode = fromStore(gameState.correspondenceMode)
+  const sharePlayerCode = fromStore(gameState.sharePlayerCode)
+  const shareAudienceCode = fromStore(gameState.shareAudienceCode)
   const shaderSource = fromStore(gameState.shaderSource)
   const activeBudget = fromStore(gameState.activeBudget)
   const canEdit = fromStore(gameState.canEdit)
@@ -84,16 +87,6 @@
 
   const turnCharsUsed = $derived(Math.max(0, shaderSource.current.length - confirmedShader.current.length))
 
-  const knownAudienceCount = $derived(
-    (() => {
-      const voters = new Set<string>()
-      Object.values(votesByRound.current).forEach((roundVotes) => {
-        Object.keys(roundVotes).forEach((voter) => voters.add(voter))
-      })
-      return Math.max(voters.size, Object.keys(currentVotes.current).length)
-    })(),
-  )
-
   const turnSeconds = $derived(gameState.remainingSeconds(turnEndsAtMs.current, nowMs.current))
   const voteSeconds = $derived(gameState.remainingSeconds(votingEndsAtMs.current, nowMs.current))
 </script>
@@ -130,7 +123,7 @@
         charsUsed={turnCharsUsed}
         charBudget={activePlayerBudget}
         audienceVoted={Object.keys(currentVotes.current).length}
-        audienceTotal={knownAudienceCount}
+        audienceTotal={audienceConnectedCount.current}
         players={playerOptions}
         currentVotes={currentVotes.current}
         votesByRound={votesByRound.current}
@@ -153,6 +146,8 @@
       voteWindowSeconds={voteWindowSeconds.current}
       gracePeriodSeconds={gracePeriodSeconds.current}
       correspondenceMode={correspondenceMode.current}
+      sharePlayerCode={sharePlayerCode.current}
+      shareAudienceCode={shareAudienceCode.current}
       onPlayerRoomKeyInput={gameState.setPlayerRoomKey}
       onAudienceRoomKeyInput={gameState.setAudienceRoomKey}
       onCharsPerPlayerInput={gameState.setCharsPerPlayer}
@@ -161,6 +156,8 @@
       onVoteWindowInput={gameState.setVoteWindowSeconds}
       onGraceInput={gameState.setGracePeriodSeconds}
       onCorrespondenceToggle={gameState.setCorrespondenceMode}
+      onSharePlayerCodeToggle={gameState.setSharePlayerCode}
+      onShareAudienceCodeToggle={gameState.setShareAudienceCode}
       onConnect={() => void gameState.connect()}
       onDisconnect={gameState.disconnect}
       onToggleReady={gameState.toggleReady}
@@ -185,7 +182,7 @@
 <style>
   .page-shell {
     --top-bar-h: 52px;
-    --info-band-h: 96px;
+    --info-band-h: 128px;
     min-height: 100svh;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;

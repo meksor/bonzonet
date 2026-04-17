@@ -11,6 +11,8 @@
     voteWindowSeconds,
     gracePeriodSeconds,
     correspondenceMode,
+    sharePlayerCode,
+    shareAudienceCode,
     onPlayerRoomKeyInput,
     onAudienceRoomKeyInput,
     onCharsPerPlayerInput,
@@ -19,6 +21,8 @@
     onVoteWindowInput,
     onGraceInput,
     onCorrespondenceToggle,
+    onSharePlayerCodeToggle,
+    onShareAudienceCodeToggle,
     onConnect,
     onDisconnect,
     onToggleReady,
@@ -36,6 +40,8 @@
     voteWindowSeconds: number
     gracePeriodSeconds: number
     correspondenceMode: boolean
+    sharePlayerCode: boolean
+    shareAudienceCode: boolean
     onPlayerRoomKeyInput: (value: string) => void
     onAudienceRoomKeyInput: (value: string) => void
     onCharsPerPlayerInput: (value: number) => void
@@ -44,6 +50,8 @@
     onVoteWindowInput: (value: number) => void
     onGraceInput: (value: number) => void
     onCorrespondenceToggle: (value: boolean) => void
+    onSharePlayerCodeToggle: (value: boolean) => void
+    onShareAudienceCodeToggle: (value: boolean) => void
     onConnect: () => void
     onDisconnect: () => void
     onToggleReady: () => void
@@ -128,6 +136,14 @@
     <label class="check">
       <input type="checkbox" checked={correspondenceMode} onchange={(e) => onCorrespondenceToggle((e.currentTarget as HTMLInputElement).checked)} />
       Correspondence mode
+    </label>
+    <label class="check">
+      <input type="checkbox" checked={sharePlayerCode} onchange={(e) => onSharePlayerCodeToggle((e.currentTarget as HTMLInputElement).checked)} />
+      Share Player code
+    </label>
+    <label class="check">
+      <input type="checkbox" checked={shareAudienceCode} onchange={(e) => onShareAudienceCodeToggle((e.currentTarget as HTMLInputElement).checked)} />
+      Share Audience code
     </label>
   </div>
 

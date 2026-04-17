@@ -12,6 +12,10 @@
   const correspondenceMode = fromStore(gameState.correspondenceMode)
   const statusMessage = fromStore(gameState.statusMessage)
   const setupError = fromStore(gameState.setupError)
+  const broadcastEnabled = fromStore(gameState.broadcastEnabled)
+  const sharePlayerCode = fromStore(gameState.sharePlayerCode)
+  const shareAudienceCode = fromStore(gameState.shareAudienceCode)
+  const broadcastListings = fromStore(gameState.broadcastListings)
 
   let playerCode = $state('')
   let audienceCode = $state('')
@@ -32,6 +36,33 @@
     if (!gameState.prepareAudienceSession(audienceCode)) return
     await gameState.connect()
     push('/audience')
+  }
+
+  const goPlayerWithCode = async (code: string) => {
+    if (!gameState.preparePlayerSession(code)) return
+    await gameState.connect()
+    push('/player')
+  }
+
+  const goAudienceWithCode = async (code: string) => {
+    if (!gameState.prepareAudienceSession(code)) return
+    await gameState.connect()
+    push('/audience')
+  }
+
+  const listings = $derived(
+    Object.values(broadcastListings.current)
+      .filter((listing) => !!listing.playerRoomKey.trim() || !!listing.audienceRoomKey.trim())
+      .sort((a, b) => b.timestamp - a.timestamp),
+  )
+
+  const relativeAge = (timestamp: number) => {
+    const deltaMs = Date.now() - timestamp
+    if (deltaMs < 1000) return 'just now'
+    const deltaSec = Math.floor(deltaMs / 1000)
+    if (deltaSec < 60) return `${deltaSec}s ago`
+    const deltaMin = Math.floor(deltaSec / 60)
+    return `${deltaMin}m ago`
   }
 </script>
 
@@ -76,6 +107,18 @@
           <input type="checkbox" checked={correspondenceMode.current} onchange={(e) => gameState.setCorrespondenceMode((e.currentTarget as HTMLInputElement).checked)} />
           Correspondence mode
         </label>
+        <label class="check">
+          <input type="checkbox" checked={broadcastEnabled.current} onchange={(e) => gameState.setBroadcastEnabled((e.currentTarget as HTMLInputElement).checked)} />
+          Advertise this Game to all Players
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={sharePlayerCode.current} onchange={(e) => gameState.setSharePlayerCode((e.currentTarget as HTMLInputElement).checked)} />
+          Share Player code
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={shareAudienceCode.current} onchange={(e) => gameState.setShareAudienceCode((e.currentTarget as HTMLInputElement).checked)} />
+          Share Audience code
+        </label>
       </div>
       <button onclick={goHost} disabled={!!setupError.current}>Host New Game</button>
     </section>
@@ -95,6 +138,52 @@
       <button onclick={goAudience} disabled={!!setupError.current}>Join as Audience</button>
     </section>
   </div>
+
+  <section class="card broadcast-room">
+    <div class="broadcast-head">
+      <h2>Broadcast Room</h2>
+      <span>{listings.length} live host{listings.length === 1 ? '' : 's'}</span>
+    </div>
+
+    {#if listings.length === 0}
+      <p class="empty-broadcast">No live broadcasts yet. Hosts can enable advertising from the Host Game card.</p>
+    {:else}
+      <div class="broadcast-grid">
+        {#each listings as listing (listing.hostPubKey)}
+          <article class="broadcast-tile">
+            <div class="tile-head">
+              <strong>{listing.hostName}</strong>
+              <span>{relativeAge(listing.timestamp)}</span>
+            </div>
+            <p class="tile-meta">Phase: {listing.phase} | Round {listing.round}</p>
+            <div class="tile-codes">
+              {#if listing.playerRoomKey.trim()}
+                <p>Player: {listing.playerRoomKey}</p>
+              {/if}
+              {#if listing.audienceRoomKey.trim()}
+                <p>Audience: {listing.audienceRoomKey}</p>
+              {/if}
+            </div>
+            <div class="tile-config">
+              <span>Chars: {listing.charsPerPlayer}</span>
+              <span>Min floor: {listing.minCharFloor}</span>
+              <span>Turn: {listing.correspondenceMode ? 'correspondence' : `${listing.turnLimitSeconds}s`}</span>
+              <span>Vote: {listing.voteWindowSeconds}s</span>
+              <span>Grace: {listing.gracePeriodSeconds}s</span>
+            </div>
+            <div class="tile-actions">
+              {#if listing.playerRoomKey.trim()}
+                <button onclick={() => void goPlayerWithCode(listing.playerRoomKey)} disabled={!!setupError.current}>Join as Player</button>
+              {/if}
+              {#if listing.audienceRoomKey.trim()}
+                <button onclick={() => void goAudienceWithCode(listing.audienceRoomKey)} disabled={!!setupError.current}>Join as Audience</button>
+              {/if}
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
 </main>
 
 <style>
@@ -163,6 +252,85 @@
     align-items: center;
     gap: 0.4rem;
     margin-top: 1.2rem;
+  }
+
+  .broadcast-room {
+    gap: 0.9rem;
+  }
+
+  .broadcast-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.8rem;
+  }
+
+  .broadcast-head span {
+    color: #9bb6d4;
+    font-size: 0.9rem;
+  }
+
+  .empty-broadcast {
+    margin: 0;
+    color: #9bb6d4;
+  }
+
+  .broadcast-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 0.7rem;
+  }
+
+  .broadcast-tile {
+    display: grid;
+    gap: 0.55rem;
+    background: #0b1624;
+    border: 1px solid #28415f;
+    padding: 0.75rem;
+  }
+
+  .tile-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+    align-items: baseline;
+  }
+
+  .tile-head strong {
+    font-size: 1rem;
+  }
+
+  .tile-head span,
+  .tile-meta {
+    color: #9bb6d4;
+    margin: 0;
+    font-size: 0.82rem;
+  }
+
+  .tile-codes {
+    display: grid;
+    gap: 0.2rem;
+    font-family: monospace;
+    font-size: 0.8rem;
+  }
+
+  .tile-codes p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .tile-config {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.25rem 0.5rem;
+    color: #b7d0ea;
+    font-size: 0.8rem;
+  }
+
+  .tile-actions {
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
   }
 
   button {
